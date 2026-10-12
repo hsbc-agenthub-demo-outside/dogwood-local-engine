@@ -1,0 +1,18 @@
+// 场景 4：反异常（用 bind 把聚合值命名后和"当前这笔"比较）
+//
+// 规则：单笔不得超过**此前一小时内已结算**总额 —— 让 agent 在它已经建立的规模上
+// 运作，拒绝突然放大几十倍的那一笔。
+//
+// 这里特意用 `::response`（已结算）而不是 `::request`，语义是"和历史实际发生过的
+// 体量比"，而不是"和正在排队的一堆请求比"。
+
+@id("hsbc_allow_transfer_baseline")
+permit (principal, action == HSBC::Action::"transfer", resource);
+
+@id("hsbc_anti_spike")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when temporal {
+    bind(prior,
+         sum_within(a, 1h, HSBC::Action::"transfer"::response{ input.amount: a }),
+         context.input.amount > prior)
+};

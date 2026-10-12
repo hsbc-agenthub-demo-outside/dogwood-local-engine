@@ -1,0 +1,14 @@
+// 场景 8：`since` + 否定左操作数 —— "验证通过之后，没有再出现过失败验证"。
+//
+// 读法：`!P since within 4h Q` 表示"自 Q（验证成功）以来，P（验证失败）从未发生过"。
+// 这是"会话仍然有效"的写法；一旦中间来了一次失败验证，这条 permit 就不再成立。
+// 注意左操作数必须**否定**：正向的 `P since Q` 要求 P 在中间**每一个**时间点都成立，
+// 现实中几乎不可能满足（中间总会有别的 kind 的事件）。
+
+@id("hsbc_read_requires_live_verification")
+permit (principal, action == HSBC::Action::"read_customer", resource)
+when temporal {
+    !HSBC::Action::"verify_customer"::response{ output.verified: false }
+    since within 4h
+    HSBC::Action::"verify_customer"::response{ output.verified: true }
+};

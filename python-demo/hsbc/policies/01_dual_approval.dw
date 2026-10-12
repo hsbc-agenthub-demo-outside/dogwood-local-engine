@@ -1,0 +1,22 @@
+// 场景 1：maker–checker（双人复核）
+//
+// 小额直通；超过 10000 必须有**同一金额、一小时内、已批准**的历史。
+//
+// 这个文件刻意**不带**兜底 permit —— 它的两条 permit 就是全部授权来源，
+// 所以"没有批准的大额转账"会因为没有 permit 覆盖而被拒（deny by default）。
+
+@id("hsbc_small_transfer")
+permit (principal, action == HSBC::Action::"transfer", resource)
+when { context.input.amount <= 10000 };
+
+@id("hsbc_large_transfer_needs_approval")
+permit (principal, action == HSBC::Action::"transfer", resource)
+when {
+    context.input.amount > 10000
+    && temporal {
+        formerly within 1h HSBC::Action::"approve_transfer"::response{
+            input.amount: context.input.amount,
+            output.approved: true
+        }
+    }
+};

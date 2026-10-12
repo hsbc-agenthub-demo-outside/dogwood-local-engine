@@ -1,0 +1,13 @@
+// 场景 6：收款人分散度 —— 一小时内最多 3 个**不同**收款人。
+//
+// `count_distinct_within(p, 1h, ...{ input.payee: p })` 对 p 去重：同一收款人转两次
+// 只算一个，换新收款人才会加一。
+
+@id("hsbc_allow_transfer_baseline")
+permit (principal, action == HSBC::Action::"transfer", resource);
+
+@id("hsbc_distinct_payee_cap")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when temporal {
+    count_distinct_within(p, 1h, HSBC::Action::"transfer"::request{ input.payee: p }) > 3
+};

@@ -1,0 +1,12 @@
+// 场景 7：硬禁名单 —— 纯 Cedar（不含时序），用来演示 `forbid` 覆盖 `permit`。
+//
+// 这里故意放一条"放行一切"的 permit，而制裁名单的 forbid 依然赢 —— 这就是 Cedar
+// 的语义：deny by default，forbid 优先于 permit。黑名单这类"无论如何都不许"的规则
+// 就该写成 forbid，而不是"让某个 permit 不匹配"。
+
+@id("hsbc_allow_transfer_baseline")
+permit (principal, action == HSBC::Action::"transfer", resource);
+
+@id("hsbc_sanctions_list")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when { context.input.payee == "SANCTIONED-001" };

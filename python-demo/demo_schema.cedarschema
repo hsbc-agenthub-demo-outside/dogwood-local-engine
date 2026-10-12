@@ -1,0 +1,35 @@
+// action schema：声明有哪些动作、谁能做、作用于什么、请求里 context.input 的形状。
+// 这是 Cedar 现成的格式，Dogwood 复用它（dogwood-server 里旗标叫 --action-schema）。
+
+namespace AgentCore {
+  // 形状必须**逐字**等于工具参数的形状：approve(amount=500) 就只有 amount。
+  // 类型名用的是 Cedar schema 语法里的原始名字：Long / String / Bool / Set<T>
+  // —— 布尔在这里叫 `Bool`，写成 `Boolean` 会被真引擎拒绝
+  // （"failed to resolve types: Boolean"）。多写一个没人读的字段不会报错，
+  // 但策略读它就等于读不到值，按 fail closed 处理。
+  type ApproveInput = { amount: Long };
+  type RefundInput  = { amount: Long };
+
+  // 工具的**返回值**也要在这里声明。默认事件 schema 给 response 事件加了
+  // `...outputs(A)`，而 outputs 取的正是 action schema 里的 `context.output`
+  // —— 不声明它，策略里的 `output.approved` 就会被真引擎拒绝：
+  //   "mentions field `output.approved`, which is not declared on that event"
+  // （这条错误是我第一次拿真引擎装这个策略时撞到的，替身永远不会报。）
+  type ApproveOutput = { approved: Bool };
+  type RefundOutput  = { refunded: Bool, amount: Long };
+
+  entity User;
+  entity Account;
+
+  action "approve" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: ApproveInput, output: ApproveOutput }
+  };
+
+  action "refund" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: RefundInput, output: RefundOutput }
+  };
+}

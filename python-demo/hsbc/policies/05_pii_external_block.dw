@@ -1,0 +1,20 @@
+// 场景 5：信息隔离 —— 读过机密客户数据后，8 小时内禁止对外转账。
+//
+// 这是"once it has accessed confidential information, never contact external
+// parties"的忠实版本：读的是 read_customer 的 **response**（工具真的返回了），
+// 并且要求那次返回的分类是 confidential。
+//
+// 语言限制：所有窗口必须有界（默认上限 24h，最大也就到 schema 允许的范围），
+// 所以"从此永远"只能用"足够长的窗口"来近似。
+
+@id("hsbc_allow_transfer_baseline")
+permit (principal, action == HSBC::Action::"transfer", resource);
+
+@id("hsbc_block_external_after_pii")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when { context.input.payee_type == "external" }
+when temporal {
+    formerly within 8h HSBC::Action::"read_customer"::response{
+        output.classification: "confidential"
+    }
+};

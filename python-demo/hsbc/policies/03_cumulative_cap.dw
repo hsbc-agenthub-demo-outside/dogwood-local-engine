@@ -1,0 +1,13 @@
+// 场景 3：累计额度 —— 一小时内累计不得超过 50000（含本次）。
+//
+// `sum_within(a, 1h, ...{ input.amount: a })` 把窗口内每笔的 amount 绑定到 a 再求和。
+// 同样统计 `::request`，所以"先并发发一堆再让它们各自完成"这条绕过路径被堵住。
+
+@id("hsbc_allow_transfer_baseline")
+permit (principal, action == HSBC::Action::"transfer", resource);
+
+@id("hsbc_cumulative_cap")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when temporal {
+    sum_within(a, 1h, HSBC::Action::"transfer"::request{ input.amount: a }) > 50000
+};

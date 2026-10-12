@@ -1,0 +1,47 @@
+// HSBC 场景的 action schema：一个"银行 agent"能用的动作 + 它们的输入/输出形状。
+//
+// 两个要点（都是前面用真引擎撞出来的）：
+//   1. 工具的**返回值**也要声明成 context.output —— 默认事件 schema 给 response
+//      事件加了 `...outputs(A)`，而 outputs 取的就是这里声明的 output 记录。
+//   2. 布尔类型名是 `Bool`（Long / String / Bool / Set<T>），不是 Boolean。
+
+namespace HSBC {
+  type TransferInput        = { amount: Long, payee: String, payee_type: String };
+  type TransferOutput       = { reference: String };
+  type ApproveTransferInput = { amount: Long, approver: String };
+  type ApproveTransferOutput = { approved: Bool };
+  type ReadCustomerInput    = { customer_id: String };
+  type ReadCustomerOutput   = { classification: String };
+  type VerifyCustomerInput  = { customer_id: String };
+  type VerifyCustomerOutput = { verified: Bool };
+
+  entity User;
+  entity Account;
+
+  // payee_type 取 "internal" / "external"；classification 取 "public" / "confidential"。
+  // 用 String + 字面量比较，省掉枚举声明的复杂度。
+
+  action "verify_customer" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: VerifyCustomerInput, output: VerifyCustomerOutput }
+  };
+
+  action "read_customer" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: ReadCustomerInput, output: ReadCustomerOutput }
+  };
+
+  action "approve_transfer" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: ApproveTransferInput, output: ApproveTransferOutput }
+  };
+
+  action "transfer" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: TransferInput, output: TransferOutput }
+  };
+}

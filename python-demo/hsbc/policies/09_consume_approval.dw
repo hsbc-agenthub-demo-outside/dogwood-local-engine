@@ -1,0 +1,43 @@
+// 场景 9（进阶）：让一次批准只能被消费一次。
+//
+// 只有"大额需批准"还不够 —— 那条批准在窗口内可以被反复用。这里把**聚合对聚合**比：
+//
+//     本窗口内的转账笔数  >  本窗口内的批准笔数   →  禁止
+//
+// 于是 1 次批准只支撑 1 次转账；第 2 次转账就会因为"转账数(2) > 批准数(1)"被拒。
+// 这也是"用 policy 表达一次性凭证"的通用套路 —— Dogwood 本身没有"消费一次"的语义。
+//
+// 两个必须知道的语义细节（都是跑真引擎时发现的）：
+//
+// 1. **裁决结果不落盘**，所以策略看不到"上一笔转账是被允许还是被拒绝"。被拒的
+//    request 一样会进日志、一样被计入。方向是安全的那一侧（重试会消耗额度），
+//    但你要接受"被拒的尝试也算数"。
+// 2. 这条 forbid 统计的是**所有**转账请求，所以它默认用在"所有转账都受审批管辖"
+//    的场景。如果你还有小额免审批通道，就得只统计超过阈值的那部分 —— 用宏做不到，
+//    需要写成原始聚合形式（`count for (a: Long), (t: Timepoint). where (... && a > 10000 && tp(t))`），
+//    并让当前请求也带 `when { context.input.amount > 10000 }`。
+
+// 时序子语言里**没有 `||`**（只有 `&&` 和 `!`），所以"小额 or 有批准"必须拆成
+// 两条 permit —— 这正是文档说的"disjunction 用多条规则表达"。
+@id("hsbc_small_transfer")
+permit (principal, action == HSBC::Action::"transfer", resource)
+when { context.input.amount <= 10000 };
+
+@id("hsbc_large_transfer_needs_approval")
+permit (principal, action == HSBC::Action::"transfer", resource)
+when {
+    context.input.amount > 10000
+    && temporal {
+        formerly within 1h HSBC::Action::"approve_transfer"::response{
+            input.amount: context.input.amount,
+            output.approved: true
+        }
+    }
+};
+
+@id("hsbc_approval_is_single_use")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when temporal {
+    count_within(1h, HSBC::Action::"transfer"::request{ input.amount: _ })
+    > count_within(1h, HSBC::Action::"approve_transfer"::response{ output.approved: true })
+};

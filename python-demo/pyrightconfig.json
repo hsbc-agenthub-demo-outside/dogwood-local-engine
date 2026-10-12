@@ -1,0 +1,8 @@
+{
+  // 用 pyright / ruff 之类命令行工具时的等价配置：把 python-demo 自己加进搜索路径，
+  // 这样 dogwood_client / dogwood_middleware 这些同级模块能被解析到。
+  // （如果你在 VS Code 里以仓库根为工作区打开，Pylance 看的是 .vscode/settings.json。）
+  "extraPaths": ["."],
+  "include": ["."],
+  "exclude": ["**/__pycache__"]
+}

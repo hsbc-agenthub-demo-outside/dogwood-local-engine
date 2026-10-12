@@ -1,0 +1,13 @@
+// 场景 2：频率限制 —— 一小时内最多 5 笔转账（**含当前这一笔**）。
+//
+// 注意用的是 `::request` 而不是 `::response`：request 把"正在申请的这一笔"也算进去，
+// 所以并发发起也不会绕过（response 只统计已完成的）。
+
+@id("hsbc_allow_transfer_baseline")
+permit (principal, action == HSBC::Action::"transfer", resource);
+
+@id("hsbc_transfer_rate_limit")
+forbid (principal, action == HSBC::Action::"transfer", resource)
+when temporal {
+    count_within(1h, HSBC::Action::"transfer"::request{ input.amount: _ }) > 5
+};

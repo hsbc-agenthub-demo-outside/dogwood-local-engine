@@ -1,0 +1,14 @@
+# 这份 demo 验证过的版本组合（Python 需 >= 3.11 —— deepagents 自己的要求）。
+#
+#   python3 -m pip install -r requirements.txt
+#
+# deepagents 会连带拉进 langchain、langchain-core、langgraph，以及 anthropic /
+# google-genai 两个 provider SDK（它默认支持多家的模型），所以装起来不算小。
+
+deepagents==0.6.12
+langchain==1.3.14
+langgraph==1.2.9
+langchain-core==1.5.1
+
+# 用真模型（而不是脚本化假模型）时才需要，装哪家装哪家：
+# openai==2.46.0
