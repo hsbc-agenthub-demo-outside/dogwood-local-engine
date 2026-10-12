@@ -1,139 +1,174 @@
-# Dogwood Local Engine
+# Dogwood AgentHub 演示工具包
 
-This repository contains the implementation of an authorization engine for
-policies expressed in the [Dogwood](https://github.com/dogwood-policy/dogwood)
-policy language. Dogwood policies can refer to an agent's past actions and
-their outcomes; this engine keeps that history, durably and in order, and
-decides each request against it.
+把 [Dogwood](https://github.com/dogwood-policy/dogwood)（AWS 开源的 agent 治理语言）
+接到 agent 框架的**工具调用边界**上，并配一套可运行的调试工具：一条命令跑真引擎、
+9 个银行场景策略、逐条断言的验证脚本。
 
-For a walkthrough of the library, from a policy and a schema to a program that
-opens a store, installs the policy and submits events, see
-[`dogwood-local-engine/README.md`](dogwood-local-engine/README.md). The
-language itself, its guide, and the reference interpreter live in
-[dogwood-policy/dogwood](https://github.com/dogwood-policy/dogwood) and
-[the Dogwood guide](https://dogwood-policy.github.io/dogwood/).
+> **归属声明**：本仓库是独立项目，**不是 AWS 官方仓库，与 AWS 无隶属关系**。
+> 仓库内的 Rust 源码来自 AWS 开源项目 `dogwood-policy/dogwood-local-engine`
+> （Apache-2.0，版权与许可见 [`NOTICE`](NOTICE) 与 [`LICENSE`](LICENSE)）；
+> 策略示例的写法参考了 AWS Open Source Blog 的文章
+> [Introducing Dogwood: runtime verification for AI agents](https://aws.amazon.com/cn/blogs/opensource/introducing-dogwood-runtime-verification-for-ai-agents/)。
+> 上游英文 README 原文保留在 [`README.upstream.md`](README.upstream.md)。
 
-To use the engine, add it and the language crate to a project:
+---
 
-```toml
-[dependencies]
-dogwood-local-engine = "1.0"
-dogwood-language = "1.0"
+## 这个仓库在做什么
+
+Dogwood 只做一件事：**根据历史回答"这个请求该不该放行"**。它不拦截、不执行工具、
+也不认证身份——那些是宿主（你的 harness / middleware）的责任。
+
+本仓库把这条链路完整搭出来并跑通：
+
+```text
+agent（DeepAgents / ADK / 自研）
+  └─ middleware（本仓库提供）        ← 拦截发生在这里：拿到 DENY 就不调用工具
+        │  Unix socket（长度前缀 + JSON）
+        ▼
+  dogwood-server（Rust）             ← 维护历史、给出裁决
+        ▲
+        │
+  policy.dw + schema.cedarschema     ← 策略与动作 schema
 ```
 
-The repository is organized into three crates:
+## 三分钟跑通
 
-- `dogwood-local-engine`: this is the primary crate, containing the library
-  implementing the authorization engine.
-- `dogwood-server`: a demo showing how the library might be used to build a
-  local service for issuing authorization verdicts.
-- `dogwood-performance`: benchmarks for various aspects of the local engine.
+### 0. 前置
 
-Compared with the reference interpreter in the main Dogwood language repository,
-the local engine library is designed to process events in an incremental
-fashion, observing events and issuing authorization verdicts for requests as
-they arrive, instead of processing the entire trace at once. It stores its
-state in a durable way on the filesystem, so that if a process using the
-library crashes or shuts down, subsequent authorization requests can be
-processed after restart while accounting for events that preceded the crash.
-
-The `dogwood-server` crate shows how one might build a local daemon service for
-issuing authorization decisions using this library. This demo application
-listens on two Unix sockets. One socket is used for *control plane* operations,
-which edit the policy set that the engine is monitoring. The other is used for
-*data plane* operations: incoming history and decision events. The engine
-records all these events and issues verdicts for decision events.
-
-## Embedding the engine safely
-
-There are a few important precautions to keep in mind when constructing an
-authorization service like the `dogwood-server` that uses the library. In
-particular, the library is a minimal core focused solely on producing correct
-authorization verdicts from the events it receives and the policies it
-monitors. An application that uses the library remains responsible for several
-tasks essential to its security and correct operation. These include, but are
-not limited to, the following concerns:
-
-- **Capturing all relevant events**: The local engine only processes events
-  that are made visible to it. Thus, its decisions are only accurate to the
-  extent that it has seen all events relevant to the policies it is tasked with
-  enforcing. If a temporal policy depends on prior events that were not sent to
-  the local engine, the engine cannot account for them, and its verdicts will
-  not be accurate with respect to that larger history.
-
-- **Event provenance and accuracy**: The application wrapping the library is
-  responsible for ensuring that events passed to the engine are well-formed and
-  have accurate fields. The library has no way to check that, for example, the
-  principal recorded on an event accurately reflects the principal that
-  initiated the action. The wrapping application must perform appropriate
-  authentication to establish the provenance of this data.
-
-- **Enforcing decisions**: The local engine issues *verdicts* about whether
-  a request should be allowed or denied, but it has no mechanism to enforce
-  those decisions. An application or client using the library is responsible
-  for accurately applying the verdicts that the engine issues.
-
-- **Restricting access to engine state**: Proper access controls must be placed
-  on the files in which the local engine's durable state is stored. If these
-  files can be modified by an unauthorized process, they could be altered to
-  affect the event trace or the set of policies the engine is enforcing.
-  Because this state may contain details about previous events and policy
-  configuration, it may contain sensitive information. For similar reasons, an
-  unauthorized process must not be able to directly alter the in-memory state
-  of the local engine. The engine library uses safe Rust, but an application
-  using the library must ensure that its own unsafe code or dependencies cannot
-  corrupt this memory.
-
-- **Securing control plane actions**: Control plane actions that affect the set
-  of policies the engine is enforcing are particularly sensitive: a process
-  that can affect the policy set could remove policies that forbid actions,
-  thereby causing the engine to permit actions that should be denied. Thus, the
-  control plane must be secured appropriately. For example, in the
-  `dogwood-server` example, these operations are performed on a separate socket
-  from data events, so that access to the control socket can be further
-  restricted. Control plane actions may fail or raise errors when attempted.
-  The local engine's default behavior in this case is to continue executing
-  with the set of policies that was active immediately before the attempted
-  control plane action. The application must account for this behavior and
-  report the failure to authorized operators so that they can correct the error
-  and try again. Silently dropping the error may give users the mistaken
-  impression that their changes to the policy set succeeded.
-
-- **Audit logging of data plane and control plane actions**: While the
-  `dogwood-local-engine` durably stores its state, its internal log is
-  periodically checkpointed and pruned. It therefore cannot be relied upon to
-  audit past actions. It guarantees only that its durable state contains enough
-  information to recover and issue future authorization decisions after a
-  crash. Snapshots preserve derived monitor state rather than a complete event
-  history, and decision results are not logged. The application using the
-  library must maintain a separate audit log that meets the service's retention,
-  attribution, and integrity requirements.
-
-- **Timestamp accuracy**: Because Dogwood policies have a temporal component,
-  the local engine uses the system clock to assign timestamps to events, and
-  these timestamps can affect authorization decisions. The accuracy of the host
-  clock is therefore critical. Unauthorized processes must not be allowed to
-  alter the clock used by the local engine. As a basic precaution, the engine
-  ensures that the timestamps it assigns are monotonically increasing, even if
-  the system clock moves backwards. But monotonicity alone does not prevent
-  clock dilation, contraction, or skew from affecting outcomes, so the host
-  clock must still be secured and monitored.
-
-## Building and testing
-
-The workspace builds with a recent stable Rust toolchain (edition 2024):
+| 需要什么 | 干什么用 | 备注 |
+|---|---|---|
+| Rust 工具链 | 构建引擎服务端 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| Python 3.11+ | 跑客户端与场景 | |
+| `python-demo/requirements.txt` | 仅跑 **agent 集成** demo 才需要 | langchain / deepagents 等 |
 
 ```bash
-cargo build --workspace --all-targets
-cargo test --workspace
+git clone git@github.com:hsbc-agenthub-demo-outside/dogwood-local-engine.git
+cd dogwood-local-engine
+cargo build --release -p dogwood-server        # 首次约 40 秒
 ```
 
-## Contributing
+### 路径 A：只调策略（不需要任何 LLM 依赖）
 
-This repository is a published, read-only mirror; see
-[CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, follow
-[SECURITY.md](SECURITY.md).
+只用 Python 标准库，适合专心调策略、看裁决变化：
 
-## License
+```bash
+cd python-demo
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+# 一次性：生成"装策略"的小工具，并跑通真引擎全链路（含重启恢复验证）
+DW_HELPER_DIR=~/dw-install DW_STORE_DIR=~/dw-store ./test_with_real_engine.sh
+
+# 9 个场景：列出 / 单跑 / 全跑（约 8 秒）
+python3 -m hsbc.run_hsbc --list
+python3 -m hsbc.run_hsbc 01
+python3 -m hsbc.run_hsbc --all
+```
+
+加 `--keep` 会保留该场景的 store 目录（含 `server.log`），方便手工接着玩：
+
+```bash
+python3 -m hsbc.run_hsbc 05 --keep
+```
+
+### 路径 B：接入 agent（DeepAgents / LangChain）
+
+```bash
+cd python-demo
+python3 -m pip install -r requirements.txt
+
+python3 doctor.py --stub --deep --probe    # 体检：依赖版本、API、socket、策略集
+python3 test_middleware.py                 # 拦截器行为断言（不经过 LLM）
+python3 run_demo.py                        # 三幕剧情：先拒 → 记批准 → 放行
+```
+
+`run_demo.py` 默认用进程内的**离线替身**（`dogwood_stub_server.py`：同协议，
+但**不是**引擎实现），所以不需要 API key、结果可复现。要打真引擎就跑上面路径 A 的脚本。
+
+## 平台差异（先看这个，能省一小时）
+
+| 能力 | Linux | macOS / 其他 |
+|---|---|---|
+| 数据面：提交事件、拿裁决 | ✅ | ✅ |
+| 控制面：在线安装 / 修改策略 | ✅ | ❌ 一律拒绝 |
+| 装策略的方式 | `dogwood-server policy install`（在线、原子替换） | 停服务 → 用引擎库离线装 → 再起服务 |
+| 集成测试 | 全绿 | `cargo test -p dogwood-local-engine` 全绿；23 个**控制面**测试必失败 |
+
+原因：控制面的信任边界依赖 Linux 的 `SO_PEERCRED`（内核认证的对端身份）。非 Linux 上
+`peer_cred()` 直接报错——**fail-closed**：宁可服务不可用，也不在没有边界的平台上"能用"。
+所以 macOS 上走 `test_with_real_engine.sh` 里那条"用库离线装策略"的路（脚本已自动化）。
+
+## 九个场景（`python-demo/hsbc/`）
+
+每个场景 = 一个独立的 `.dw` 策略文件 + 一段事件轨迹 + 逐条断言，用**真引擎**跑，
+可以单独改、单独验：
+
+| # | 规则 | 时间机制 |
+|---|---|---|
+| 01 | 大额转账必须有同额批准（maker-checker） | `formerly within 1h` |
+| 02 | 一小时内最多 5 笔转账 | `count_within` + `::request` |
+| 03 | 一小时累计不超过 50000 | `sum_within` |
+| 04 | 单笔不得超过已结算总额（反异常） | `bind` + `::response` |
+| 05 | 读过机密客户数据后 8 小时内禁止对外转账 | `formerly` + 输入过滤 |
+| 06 | 一小时最多 3 个不同收款人 | `count_distinct_within` |
+| 07 | 制裁名单硬禁（纯 Cedar） | `forbid` 覆盖 `permit` |
+| 08 | 会话有效性：验证后未再失败 | `since` + 否定左操作数 |
+| 09 | 一次批准只能消费一次（进阶） | 聚合对聚合 |
+
+细节与"六个必须知道的语义"见 [`python-demo/hsbc/README.md`](python-demo/hsbc/README.md)。
+
+## 五个核心概念
+
+| 概念 | 一句话 |
+|---|---|
+| 两种事件 kind | `request` 是**决策点**（拿 allow/deny），`response` 是**历史**（只入账） |
+| `logged` vs `context` | `logged` 是**给未来**的历史记录，`context` 是**给现在**的请求字段。策略里 `input.amount: context.input.amount` 读作"历史那笔的金额 == 当前这笔的金额" |
+| 历史按 principal 分键 | 每条事件（**包括 response**）都要带 `principal`；漏了它历史会落到别的键上，症状是**静默 DENY** |
+| deny by default | 没有 `permit` 覆盖就是拒绝；`forbid` 覆盖 `permit` |
+| 裁决 ≠ 执行 | 引擎只回裁决，**拦截由 middleware 做**（不调用工具） |
+
+更完整的机制说明（含"为什么必须发 response 事件"）见
+[`python-demo/dogwood_middleware.py`](python-demo/dogwood_middleware.py) 的模块文档。
+
+## 常用命令
+
+| 想干什么 | 命令 |
+|---|---|
+| 构建服务端 | `cargo build --release -p dogwood-server` |
+| 引擎测试（macOS 可全绿） | `cargo test -p dogwood-local-engine` |
+| 全量测试 | `cargo test --workspace`（macOS 上 23 个控制面测试必失败） |
+| 起服务 | `./target/release/dogwood-server --dir /tmp/dw run` |
+| 手工发一个事件 | `./target/release/dogwood-server --dir /tmp/dw submit HSBC::Action::transfer request --principal 'HSBC::User::"alice"' --resource 'HSBC::Account::"main"' --logged '{"input":{"amount":1000}}' --context '{"input":{"amount":1000}}'` |
+| 看运行态 | `./target/release/dogwood-server --dir /tmp/dw status --json` |
+| 真引擎跑通全链路 | `cd python-demo && DW_HELPER_DIR=~/dw-install DW_STORE_DIR=~/dw-store ./test_with_real_engine.sh` |
+| 跑 9 个策略场景 | `cd python-demo && python3 -m hsbc.run_hsbc --all` |
+| 体检 / 排障 | `python3 doctor.py` · `DOGWOOD_TRACE=1 python3 test_middleware.py`（打出每一帧 JSON） |
+
+## 已知限制
+
+- **控制面仅 Linux**（见上表）。`dogwood-server` 自标 **not for production**：它是参考实现。
+- **窗口必须有界**（默认上限 24h），"从此永远"只能用足够长的窗口近似。
+- **时序子语言没有 `||`**，只有 `&&` 和 `!`；"或者"要用多条规则表达。
+- **聚合只有 `count` 和 `sum`**（无 min/max/avg）；`count_within` 这类是标准库宏。
+- **单机单写者**：一个 store 同一时刻只能被一个进程打开。
+- **没有监控/审计**：裁决结果不落盘、内部日志会被 checkpoint 裁剪；审计与指标必须宿主自己建。
+- **不认证、不执行**：事件里的 `principal` 由调用方填写，引擎无法验证真假。
+
+## 目录结构
+
+| 路径 | 说明 |
+|---|---|
+| [`dogwood-local-engine/`](dogwood-local-engine) | Rust 引擎（上游源码）：持久化、增量的时序鉴权引擎 |
+| [`dogwood-server/`](dogwood-server) | Rust 服务端（上游源码）：把引擎放在 Unix socket 后面 |
+| [`dogwood-performance/`](dogwood-performance) | Rust 基准（上游源码） |
+| [`python-demo/`](python-demo) | **本仓库的主要交付**：Python 客户端、拦截器、demo、体检脚本 |
+| [`python-demo/hsbc/`](python-demo/hsbc) | 9 个银行场景策略 + 轨迹 + 断言 |
+| [`README.upstream.md`](README.upstream.md) | 上游 README 原文（保留以便对照） |
+| [`AGENTS.md`](AGENTS.md) | 仓库协作与构建约定 |
+
+## 许可与归属
+
+- 本仓库整体以 **Apache-2.0** 发布。`dogwood-local-engine/`、`dogwood-server/`、
+  `dogwood-performance/` 源自 AWS 的开源项目，版权归 Amazon.com, Inc. 或其关联方所有
+  （见 [`NOTICE`](NOTICE)）——请保留这些文件。
+- 上游项目：<https://github.com/dogwood-policy/dogwood>（语言、指南、参考解释器）与
+  <https://github.com/dogwood-policy/dogwood-local-engine>（本仓库包含的引擎）。
+- 本仓库的示例与工具由本仓库贡献者维护；上游不接受本仓库的 PR（上游是只读镜像）。
