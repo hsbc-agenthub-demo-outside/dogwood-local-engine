@@ -143,6 +143,7 @@ python3 run_demo.py                        # 三幕剧情：先拒 → 记批准
 | 体检 / 排障 | `python3 doctor.py` · `DOGWOOD_TRACE=1 python3 test_middleware.py`（打出每一帧 JSON） |
 | 起 HTTP + Swagger（Docker） | `cp .env.example .env` → 填 `DOGWOOD_CONTROL_TOKEN` → `docker compose up --build -d` → <http://127.0.0.1:8080/docs> |
 | HTTP 全链路自检 | `./dogwood-http/examples/smoke.sh` |
+| HTTP 测试用例集（写规则 + 验证裁决） | `python3 dogwood-http/examples/testcases.py --all`（加 `-v` 看每次 allow/deny） |
 
 ## HTTP 面（`dogwood-http/`，可选）
 
@@ -156,6 +157,11 @@ echo "DOGWOOD_CONTROL_TOKEN=$(openssl rand -hex 32)" > .env
 docker compose up --build -d
 ./dogwood-http/examples/smoke.sh     # 真引擎：403 → 记录批准 → 200；10 条断言
 ```
+
+如果只想要**单容器 + 一条 `docker run`**（不需要 Compose），用
+[`Dockerfile.allinone`](Dockerfile.allinone)：它把引擎和两个面打进一个容器、一个 uid，
+构建与运行见 [`docs/单容器部署（all-in-one）.md`](docs/单容器部署（all-in-one）.md)。
+代价是数据面与控制面同进程（失去防篡改的 uid 边界），适合单机 / 单租户 / 可信 agent。
 
 两条要记住的：**deny 是 HTTP 403，而不是 `200 + allowed:false`**（于是「看 2xx 就
 放行」的客户端天然 fail-closed）；**控制面必须和引擎同 uid、同 PID namespace**

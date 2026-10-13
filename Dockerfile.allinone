@@ -1,0 +1,67 @@
+# All-in-one Dogwood image: engine + HTTP adapter (both planes) in one container,
+# one uid. Build and run this with plain Docker — no Compose file:
+#
+#   docker build -f Dockerfile.allinone -t dogwood-allinone .
+#   docker run -d --name dogwood \
+#     -e DOGWOOD_CONTROL_TOKEN="$(openssl rand -hex 32)" \
+#     -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
+#     -v dogwood-state:/var/lib/dogwood \
+#     dogwood-allinone
+#
+# See `docker/all-in-one/entrypoint.sh` for the environment variables and for the
+# security trade-off this simpler topology makes. Use the multi-service
+# `docker-compose.yml` when the data-plane/control-plane uid split matters.
+#
+# No `# syntax=` directive on purpose: the built-in frontend that ships with
+# Docker Desktop supports everything used here, and pinning a frontend version
+# fails in networks where Docker Hub is unreachable.
+
+# ─── build ───────────────────────────────────────────────────────────
+FROM rust:1-bookworm AS builder
+
+WORKDIR /src
+COPY . .
+
+# The base `rust` image already carries git and ca-certificates, which this build
+# needs because the workspace pins `dogwood-language` at a git revision. Asserted
+# rather than assumed, so a base image that stops shipping one fails here with a
+# message instead of as a confusing fetch error later.
+RUN git --version && cargo --version
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p dogwood-server -p dogwood-http \
+ && mkdir -p /out \
+ && cp target/release/dogwood-server target/release/dogwood-http /out/
+
+# ─── runtime ─────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+
+# One principal. Because engine and adapter run in the same container as the same
+# uid, the two constraints the three-service layout has to satisfy out of band —
+# "the control socket is 0700, so share the uid" and "SO_PEERCRED needs a shared
+# PID namespace" — are satisfied for free.
+RUN groupadd --gid 10001 dogwood \
+ && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin dogwood \
+ && install -d -o dogwood -g dogwood -m 0700 /var/lib/dogwood
+
+COPY --from=builder /out/dogwood-server /usr/local/bin/dogwood-server
+COPY --from=builder /out/dogwood-http /usr/local/bin/dogwood-http
+COPY docker/all-in-one/entrypoint.sh /usr/local/bin/dogwood-entrypoint
+RUN chmod 0755 /usr/local/bin/dogwood-entrypoint
+
+# No `USER` in a variable sense: this image always runs as the engine uid.
+USER 10001:10001
+
+# data plane (:8080) and control plane (:8081). Publish them narrowly — see the
+# run command above. The control plane is protected by a bearer token, not by the
+# bind address, once it is published.
+EXPOSE 8080 8081
+
+VOLUME ["/var/lib/dogwood"]
+
+# No curl in the image: the adapter probes itself over HTTP.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=12 \
+    CMD ["dogwood-http", "healthcheck", "http://127.0.0.1:8080/healthz"]
+
+ENTRYPOINT ["/usr/local/bin/dogwood-entrypoint"]
