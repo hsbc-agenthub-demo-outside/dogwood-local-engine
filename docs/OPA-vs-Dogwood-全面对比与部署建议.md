@@ -7,7 +7,7 @@
 > **信息来源**（均为本文写作时抓取的真实源码/文档，非二手转述）：
 > - OPA 仓库 `main` 分支快照（提交 `89ed3cf2`，2026-10-12），含 `README.md`、`docs/docs/*`、`server/`、`plugins/`、`go.mod`。
 > - 本仓库 `README.md`、`README.upstream.md`、`dogwood-local-engine/README.md`、`dogwood-server/src/lib.rs`、
->   `dogwood-http/README.md`、`dogwood-performance/README.md`、`docker-compose.yml`。
+>   `dogwood-http/README.md`、`dogwood-performance/README.md`、`Dockerfile.allinone`。
 > - 上游语言仓库 `dogwood-policy/dogwood` 的 `README.md` 与 `dogwood-docs/guide/*`。
 >
 > **一句话定位差异**：OPA 是一个**通用、无状态、以请求为输入**的策略决策点（PDP）；
@@ -328,7 +328,7 @@ OPA 也能做（同一 REST 服务里靠鉴权区分政策 API 与数据 API）�
 | 健康检查 | ✅ `/health` + Prometheus 指标 | ⚠️ `ping`（数据面 liveness）；**无内建指标**，监控需宿主自建 |
 | 日志 | ✅ 可配级别（含新的 `--log-level-request`）；决策日志 | ⚠️ 有内部日志，但会被 checkpoint 裁剪，不能当审计 |
 | 状态上报 | ✅ Status API + Discovery | ⚠️ `status`/`status --json` |
-| 部署编排 | ✅ 官方 K8s/Docker/AWS/GCP/Azure 指南、Helm、Gatekeeper | ⚠️ 仓库内有 `docker-compose.yml`（本地 Docker Desktop 演示） |
+| 部署编排 | ✅ 官方 K8s/Docker/AWS/GCP/Azure 指南、Helm、Gatekeeper | ⚠️ 仓库内有 `Dockerfile.allinone`（本地 Docker Desktop 单容器演示） |
 | 测试工具 | ✅ `opa test`/`fmt`/`check`/Playground/VS Code | ✅ `dogwood validate`/`lower`/`replay` + Rust 差分/恢复测试 |
 | 生态集成 | ✅ Envoy/Istio/K8s/Terraform/Docker/SSH/GraphQL/Kafka… | ⚠️ 早期，主要面向 agent harness（本仓库有 Python middleware/场景） |
 | 多语言 SDK | ✅ 大量 | ⚠️ 本仓库提供 Python；其它语言手写 socket |
@@ -510,7 +510,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 | **A. 进程内嵌引擎库** | agent/harness 与引擎在同一信任域，追求最简与最低延迟 | 没有防篡改边界：能改自己规则的进程无法被自己的规则治理 |
 | **B. 独立进程 `dogwood-server`（推荐给不可信 agent）** | agent 可能不可信，需要策略/日志/监控器放在进程边界之后 | 必须 **不同 uid + 更低权限**；控制面**仅 Linux** |
 
-形态 B 的硬性前置条件（`docker-compose.yml` 已经把这些约束写进注释）：
+形态 B 的硬性前置条件（详见 [`调试与测试.md`](调试与测试.md) §3.3）：
 
 1. **服务端 uid ≠ agent uid，且服务端不高于 agent**——同 uid 就没有边界；
 2. **控制面与引擎必须同 uid、同 PID namespace**：control socket 是 `0700`，别的 uid 在 `connect()` 就被拒；

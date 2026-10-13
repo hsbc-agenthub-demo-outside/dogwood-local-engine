@@ -13,6 +13,12 @@ target/
 # have no part in the Rust build.
 python-demo/
 
+# ...except the demo policy the socket all-in-one image bakes in, so that its
+# `install` and `self-test` need no mounted files. A path re-included under an
+# excluded directory has to come *after* the exclusion.
+!python-demo/demo_policy.dw
+!python-demo/demo_schema.cedarschema
+
 # Local noise.
 *.log
 **/*.rs.bk

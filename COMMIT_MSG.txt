@@ -1,0 +1,52 @@
+feat: expose the engine's own protocol over TCP, and add a Python SDK
+
+The engine speaks one protocol, over a Unix socket. That is fine on one
+machine and unusable everywhere else: Docker cannot publish a Unix socket,
+so a process on another host could not reach the engine at all.
+
+This adds a deployment that keeps that protocol and changes only what
+carries it:
+
+  * Dockerfile.socket-allinone — one container: the engine, one TCP
+    forwarder per engine socket, and a ready-to-use copy of the SDK.
+    DOGWOOD_TCP_DATA_BIND / DOGWOOD_TCP_CONTROL_BIND turn the ports on.
+  * docker/socket-all-in-one/bridge.py — a ~120-line byte pump per socket.
+    It does not parse frames, so a new engine verb needs no change here.
+    One TCP connection maps to one upstream connection; multiplexing them
+    would interleave frames from different clients into one stream.
+  * python-sdk/ — a zero-dependency Python client for the same protocol,
+    over tcp://, unix://, or http:// against the adapter. DogwoodClient and
+    DogwoodAdminClient stay separate classes because the engine's two
+    planes have disjoint verbs: the object handed to agent code has no
+    install/add/delete method at all.
+  * dev.sh — one command for local work: build, run, wait, install the
+    demo policy, print the endpoints. up / test / logs / status / down /
+    reset.
+
+Two constraints, documented where they bite:
+
+  * The forwarder connects as itself, so the engine authenticates the
+    forwarder, not the caller behind it. On the data plane that changes
+    nothing (that socket is 0666 by design); on the control plane it is the
+    whole authorization story, so that port is published to loopback only.
+    A deployment that needs no online authoring can install at startup via
+    DOGWOOD_POLICY_FILE and not open the port at all.
+  * The engine sets its state directory to 0700, and a socket below a 0700
+    directory is unreachable by any other uid however the socket itself is
+    chmodded. So the socket directory is its own volume, mounted a second
+    time at a traversable path for the agent's uid.
+
+Docs: the deployment doc now covers both forms, socket+TCP first and HTTP
+as the fallback kept for comparison; the SDK manual is a five-minute
+quickstart; the debugging doc holds the test matrix and troubleshooting.
+The former "TCP 对接指南" is renamed to "HTTP 对接指南", now that TCP
+describes two different things.
+
+Removes the multi-container Compose deployments (Dockerfile and
+docker-compose.yml): three containers, three uids, two volumes. The
+single-container form covers every case this demo needs, and both files
+stay recoverable from history.
+
+Verified against a running deployment: 38 Python tests (unit, plus live
+over tcp://, unix:// and http://), the Rust adapter's 34, and an end-to-end
+deny -> record approval -> allow walk driven from the host over TCP.

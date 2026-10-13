@@ -141,33 +141,75 @@ python3 run_demo.py                        # 三幕剧情：先拒 → 记批准
 | 真引擎跑通全链路 | `cd python-demo && DW_HELPER_DIR=~/dw-install DW_STORE_DIR=~/dw-store ./test_with_real_engine.sh` |
 | 跑 9 个策略场景 | `cd python-demo && python3 -m hsbc.run_hsbc --all` |
 | 体检 / 排障 | `python3 doctor.py` · `DOGWOOD_TRACE=1 python3 test_middleware.py`（打出每一帧 JSON） |
-| 起 HTTP + Swagger（Docker） | `cp .env.example .env` → 填 `DOGWOOD_CONTROL_TOKEN` → `docker compose up --build -d` → <http://127.0.0.1:8080/docs> |
+| 部署 socket + TCP（主方案） | `docker build -f Dockerfile.socket-allinone -t dogwood-socket-allinone .` → `docker run -d -e DOGWOOD_TCP_DATA_BIND=0.0.0.0:9000 -e DOGWOOD_TCP_CONTROL_BIND=0.0.0.0:9001 -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 -v dogwood-state:/var/lib/dogwood -v dogwood-run:/var/lib/dogwood/run dogwood-socket-allinone` |
+| 部署 HTTP（备选） | `docker build -f Dockerfile.allinone -t dogwood-allinone .` → `docker run -d -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 -e DOGWOOD_CONTROL_TOKEN=… -v dogwood-state:/var/lib/dogwood dogwood-allinone` → <http://127.0.0.1:8080/docs> |
+| 本地调试（一条命令） | `./dev.sh up`（构建+起+装策略+打印 token 和地址）· `./dev.sh test` · `./dev.sh logs` · `./dev.sh reset` |
 | HTTP 全链路自检 | `./dogwood-http/examples/smoke.sh` |
 | HTTP 测试用例集（写规则 + 验证裁决） | `python3 dogwood-http/examples/testcases.py --all`（加 `-v` 看每次 allow/deny） |
+| Python SDK | `PYTHONPATH=python-sdk python3 -c "from dogwood_sdk import DogwoodClient; print('ok')"` |
+| **调试与测试** | [`docs/调试与测试.md`](docs/调试与测试.md)（测试矩阵、排障、踩过的坑） |
+| **Python SDK 五分钟上手** | [`docs/Python SDK 使用手册.md`](<docs/Python SDK 使用手册.md>)（hello world + 常用方法） |
+| **HTTP 对接指南**（备选方案） | [`docs/HTTP 对接指南.md`](<docs/HTTP 对接指南.md>) |
 
-## HTTP 面（`dogwood-http/`，可选）
+## 部署为服务（可选）
 
-引擎的接口是 Unix socket 上的长度前缀 JSON。如果部署环境拿不到 Unix socket
-（Docker Desktop、远程 harness、或者只想点点按钮看裁决），
-[`dogwood-http/`](dogwood-http) 把它翻成 HTTP，并给两个面各配一份 OpenAPI + Swagger UI：
+都是**一个容器、一条 `docker run`**：
+
+| | **socket + TCP**（主方案） | **HTTP**（备选，方便对比） |
+|---|---|---|
+| 镜像 | `dogwood-socket-allinone` | `dogwood-allinone` |
+| 对外 | 引擎**原样的协议**走 TCP（`:9000` / `:9001`） | HTTP `:8080` / `:8081` |
+| 客户端 | `dogwood_sdk` 直接说引擎协议 | 任何 HTTP 客户端（SDK 也行） |
+| 中间层 | 纯字节搬运的转发器，不解析协议 | 适配器（解析、映射、出 OpenAPI） |
+
+主方案少一层、少一份契约；HTTP 那套留着方便对比和"任何语言都能接"的场合。
+
+### socket + TCP（主方案）
 
 ```bash
-cp .env.example .env
-echo "DOGWOOD_CONTROL_TOKEN=$(openssl rand -hex 32)" > .env
-docker compose up --build -d
+docker build -f Dockerfile.socket-allinone -t dogwood-socket-allinone .
+
+docker run -d --name dogwood --restart unless-stopped \
+  -e DOGWOOD_TCP_DATA_BIND=0.0.0.0:9000 \
+  -e DOGWOOD_TCP_CONTROL_BIND=0.0.0.0:9001 \
+  -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 \
+  -v dogwood-state:/var/lib/dogwood -v dogwood-run:/var/lib/dogwood/run \
+  dogwood-socket-allinone
+
+PYTHONPATH=python-sdk python3 -c "
+from dogwood_sdk import DogwoodClient
+print(DogwoodClient('tcp://127.0.0.1:9000').ping())"
+```
+
+⚠️ **控制面端口（9001）谁能连谁就能改策略**——转发器以引擎的 uid 连 socket，引擎认证的是
+转发器，不是 TCP 那头的人。上面只发布到 loopback；要暴露到别处，前面得放认证反代，
+或者用 `DOGWOOD_POLICY_FILE` 启动时装策略、不开这个端口。
+
+### HTTP（备选）
+
+[`dogwood-http/`](dogwood-http) 把引擎的 socket 面翻成 HTTP，两个面各配一份 OpenAPI +
+Swagger UI。
+
+```bash
+docker build -f Dockerfile.allinone -t dogwood-allinone .
+
+docker run -d --name dogwood --restart unless-stopped \
+  -e DOGWOOD_CONTROL_TOKEN="$(openssl rand -hex 32)" \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
+  -v dogwood-state:/var/lib/dogwood \
+  dogwood-allinone
+
 ./dogwood-http/examples/smoke.sh     # 真引擎：403 → 记录批准 → 200；10 条断言
 ```
 
-如果只想要**单容器 + 一条 `docker run`**（不需要 Compose），用
-[`Dockerfile.allinone`](Dockerfile.allinone)：它把引擎和两个面打进一个容器、一个 uid，
-构建与运行见 [`docs/单容器部署（all-in-one）.md`](docs/单容器部署（all-in-one）.md)。
-代价是数据面与控制面同进程（失去防篡改的 uid 边界），适合单机 / 单租户 / 可信 agent。
+两个端口：`:8080` 数据面（上报事件、拿裁决），`:8081` 控制面（装/改策略，要 bearer token）。
 
-两条要记住的：**deny 是 HTTP 403，而不是 `200 + allowed:false`**（于是「看 2xx 就
-放行」的客户端天然 fail-closed）；**控制面必须和引擎同 uid、同 PID namespace**
-（control socket 是 `0700`，且 peer 认证依赖 Linux 的 `SO_PEERCRED`）。
-详见 [`dogwood-http/README.md`](dogwood-http/README.md)，里面也记了两个上游/环境层面的
-真实约束：数据 socket 被 `0700` 的 state 目录挡住，跨 PID namespace 的 peer 认证会失败。
+要记住的：**deny 是 HTTP 403，而不是 `200 + allowed:false`**（于是「看 2xx 就放行」的
+客户端天然 fail-closed）。
+
+两个部署的完整说明（含"同一份卷为什么要挂两次"、以及不想开端口时的纯 `docker exec`
+用法）见
+[`docs/单容器部署（all-in-one）.md`](<docs/单容器部署（all-in-one）.md>)。
 
 ## 已知限制
 
@@ -185,6 +227,9 @@ docker compose up --build -d
 |---|---|
 | [`dogwood-local-engine/`](dogwood-local-engine) | Rust 引擎（上游源码）：持久化、增量的时序鉴权引擎 |
 | [`dogwood-server/`](dogwood-server) | Rust 服务端（上游源码）：把引擎放在 Unix socket 后面 |
+| [`dogwood-http/`](dogwood-http) | HTTP + OpenAPI 适配器：引擎的 socket 面翻成两个 HTTP 面 |
+| [`python-sdk/`](python-sdk) | 零依赖的 Python 客户端（HTTP，可选本地 socket） |
+| [`Dockerfile.allinone`](Dockerfile.allinone) | **唯一的部署方式**：引擎 + 适配器装进一个容器 |
 | [`dogwood-performance/`](dogwood-performance) | Rust 基准（上游源码） |
 | [`python-demo/`](python-demo) | **本仓库的主要交付**：Python 客户端、拦截器、demo、体检脚本 |
 | [`python-demo/hsbc/`](python-demo/hsbc) | 9 个银行场景策略 + 轨迹 + 断言 |

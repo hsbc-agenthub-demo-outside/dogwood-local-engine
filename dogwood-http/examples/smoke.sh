@@ -25,7 +25,8 @@ ROOT=$(cd "$HERE/../.." && pwd)
 DATA_URL=${DOGWOOD_DATA_URL:-http://127.0.0.1:8080}
 CONTROL_URL=${DOGWOOD_CONTROL_URL:-http://127.0.0.1:8081}
 
-# The token comes from the environment, or from the .env docker compose reads.
+# The token comes from the environment, or from the `.env` the container was started
+# with (`docker run --env-file .env …`).
 if [[ -z ${DOGWOOD_CONTROL_TOKEN:-} && -f "$ROOT/.env" ]]; then
     DOGWOOD_CONTROL_TOKEN=$(sed -n 's/^DOGWOOD_CONTROL_TOKEN=//p' "$ROOT/.env" | tail -1)
 fi

@@ -1,0 +1,121 @@
+# Socket all-in-one Dogwood image: the engine **and a ready client** in one container,
+# plain `docker run`, no Compose file.
+#
+#   docker build -f Dockerfile.socket-allinone -t dogwood-socket-allinone .
+#
+#   # one command, no volumes, no external state: proves the image works
+#   docker run --rm dogwood-socket-allinone self-test
+#
+#   # a long-lived engine. The socket volume is mounted TWICE — see below — which is
+#   # what makes the agent's uid able to reach the data socket.
+#   docker run -d --name dogwood \
+#     -v dogwood-state:/var/lib/dogwood \
+#     -v dogwood-run:/var/lib/dogwood/run \
+#     -v dogwood-run:/run/dogwood \
+#     dogwood-socket-allinone
+#
+#   # the operator installs a policy, the agent asks for verdicts
+#   docker exec dogwood dogwood-entrypoint install \
+#     /opt/dogwood/examples/demo_policy.dw /opt/dogwood/examples/demo_schema.cedarschema
+#   docker exec -u dogwood-agent dogwood dogwood-entrypoint demo
+#
+# See `docker/socket-all-in-one/entrypoint.sh` for the commands, the environment
+# variables, and the one thing this topology gives up versus the three-container
+# compose layout.
+#
+# Why the socket volume is mounted twice: the engine sets its state directory to 0700
+# (it holds the policy set and the log), and a Unix socket below a 0700 directory is
+# unreachable by any other uid **no matter what the socket's own mode is** — path
+# resolution needs search permission on every directory above it. So the socket
+# directory is a volume of its own, mounted once where the engine writes it and once
+# at a traversable path where the agent reads it. The entrypoint checks this at
+# startup and tells you exactly where it is blocked if you forget.
+#
+# For the HTTP face of the same engine, see `Dockerfile.allinone` — that one is the
+# fallback for callers that would rather speak HTTP than the engine's own protocol.
+#
+# No `# syntax=` directive on purpose: the built-in frontend that ships with Docker
+# Desktop supports everything used here, and pinning a frontend version fails in
+# networks where Docker Hub is unreachable.
+
+# ─── build ───────────────────────────────────────────────────────────
+FROM rust:1-bookworm AS builder
+
+WORKDIR /src
+COPY . .
+
+# The base `rust` image already carries git and ca-certificates, which this build needs
+# because the workspace pins `dogwood-language` at a git revision. Asserted rather
+# than assumed, so a base image that stops shipping one fails here with a message
+# instead of as a confusing fetch error later.
+RUN git --version && cargo --version
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p dogwood-server \
+ && mkdir -p /out \
+ && cp target/release/dogwood-server /out/
+
+# ─── runtime ─────────────────────────────────────────────────────────
+# `python:3.12-slim` rather than `debian:bookworm-slim`, because "all in one" here
+# means the client is in the container too: the socket API has no port, so a consumer
+# that is not in this container cannot reach it at all. The SDK is stdlib-only, so
+# nothing is installed — the base image's own interpreter is the whole dependency.
+#
+# It is also Debian bookworm, so the binary built against `rust:1-bookworm` links
+# cleanly.
+FROM python:3.12-slim AS runtime
+
+# Two principals, and unlike the HTTP all-in-one this image keeps the split:
+#
+#   10001 dogwood        owns the engine process, its store, and the control socket.
+#   10002 dogwood-agent  is what the agent's side runs as, via `docker exec -u`.
+#
+# A process cannot demote *itself* from 10001 to 10002 — that needs privilege — so the
+# caller picks the uid, which Docker can do for any `docker exec`. The engine's own
+# authorization is unchanged by any of this: the control socket is 0700 and its
+# callers are attested by uid, so uid 10002 cannot author policy here any more than it
+# could across three containers.
+RUN groupadd --gid 10001 dogwood \
+ && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin dogwood \
+ && groupadd --gid 10002 dogwood-agent \
+ && useradd --uid 10002 --gid 10002 --no-create-home --shell /usr/sbin/nologin dogwood-agent \
+ && install -d -o dogwood -g dogwood -m 0700 /var/lib/dogwood \
+ && install -d -o dogwood -g dogwood -m 0711 /var/lib/dogwood/run
+
+COPY --from=builder /out/dogwood-server /usr/local/bin/dogwood-server
+
+# The client. Read-only in spirit as well as in the filesystem — nothing writes to it.
+COPY python-sdk /opt/dogwood-sdk
+
+# The demo policy, so `install` and `self-test` need no arguments and no mounted files.
+COPY python-demo/demo_policy.dw python-demo/demo_schema.cedarschema /opt/dogwood/examples/
+
+COPY docker/socket-all-in-one/entrypoint.sh /usr/local/bin/dogwood-entrypoint
+COPY docker/socket-all-in-one/socket-reachability.py /usr/local/bin/socket-reachability.py
+COPY docker/socket-all-in-one/bridge.py /usr/local/bin/dogwood-bridge
+RUN chmod 0755 /usr/local/bin/dogwood-entrypoint \
+    /usr/local/bin/socket-reachability.py \
+    /usr/local/bin/dogwood-bridge
+
+ENV PYTHONPATH=/opt/dogwood-sdk \
+    PYTHONDONTWRITEBYTECODE=1
+
+# This image always runs as the engine uid; the agent gets 10002 from
+# `docker exec -u dogwood-agent`, which does not need the container to be privileged.
+USER 10001:10001
+
+# Both paths are volumes because both are mounted separately (see the header and the
+# compose sibling). Declaring them is also what seeds a fresh named volume with the
+# ownership and mode of the image path, so the engine can write its store without the
+# container ever running as root to fix permissions first.
+VOLUME ["/var/lib/dogwood", "/var/lib/dogwood/run"]
+
+# No `EXPOSE`: there is no port. The API is a socket, and Docker cannot publish one.
+
+# No curl either — the engine probes its own socket.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=12 \
+    CMD ["dogwood-server", "--dir", "/var/lib/dogwood", "ping"]
+
+ENTRYPOINT ["/usr/local/bin/dogwood-entrypoint"]
+CMD ["run"]

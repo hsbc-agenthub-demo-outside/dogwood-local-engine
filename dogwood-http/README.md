@@ -76,28 +76,29 @@ open http://127.0.0.1:8081/docs   # 点 Authorize 填 token
 非 Linux 上 `peer_cred()` 直接报错，fail-closed 拒绝**所有**控制连接。所以本机
 `/v1/policy` 会失败，数据面则正常。要在线装策略，走下面的 Docker——容器是 Linux。
 
-## Docker Desktop 跑
+## Docker 跑
 
 ```bash
-cp .env.example .env
-echo "DOGWOOD_CONTROL_TOKEN=$(openssl rand -hex 32)" > .env
-docker compose up --build -d
+docker build -f Dockerfile.allinone -t dogwood-allinone .
+docker run -d --name dogwood --restart unless-stopped \
+  -e DOGWOOD_CONTROL_TOKEN="$(openssl rand -hex 32)" \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
+  -v dogwood-state:/var/lib/dogwood \
+  dogwood-allinone
 
 ./dogwood-http/examples/smoke.sh      # 10 条断言，含真引擎的 403 → 200
 open http://127.0.0.1:8080/docs
 ```
 
-三个容器，两个 uid，两份卷：
+一个容器、一个 uid、四件事：引擎、数据面适配器、控制面适配器、以及一个自己探自己的
+健康检查。完整说明见 [`../docs/单容器部署（all-in-one）.md`](<../docs/单容器部署（all-in-one）.md>)。
 
-| 服务 | uid | 卷 | 说明 |
-|---|---|---|---|
-| `engine` | 10001 | state + run | 引擎本体。不发布任何端口 |
-| `control` | 10001 | state + run | 控制面适配器，和引擎**同 PID namespace** |
-| `data` | 10002 | 只有 run | 数据面适配器。看不到 store，也看不到 control socket |
+**这个拓扑没有数据面/控制面的 uid 隔离**：两个面在同一个进程里，所以"接收 agent 事件的
+进程"也能改策略。它适合单机 / 单租户 / 可信 agent。要那条边界，得把两个面拆成不同 uid 的
+容器——而拆开之后会踩到 §"部署时踩到的两件事"里的两个坑（现在这个部署一个都不受影响，
+因为同容器同 uid 天然满足那两个前提）。
 
-后两行各自对应一个真实约束，都不是随手写的：见下。
-
-## 部署时踩到的两件事（都是上游/环境层面的，不是适配器的 bug）
+## 拆成多容器时会踩到的两件事（单容器部署不受影响）
 
 ### 1. 低权限 uid 连不上数据 socket——上游布局做不到它注释里宣称的事
 

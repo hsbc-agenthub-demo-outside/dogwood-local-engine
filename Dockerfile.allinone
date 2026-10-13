@@ -9,8 +9,10 @@
 #     dogwood-allinone
 #
 # See `docker/all-in-one/entrypoint.sh` for the environment variables and for the
-# security trade-off this simpler topology makes. Use the multi-service
-# `docker-compose.yml` when the data-plane/control-plane uid split matters.
+# security trade-off this topology makes: both planes share one process and one uid,
+# so the process that takes the agent's events can also rewrite the policy set. If that
+# matters, the two planes have to be split into containers with different uids — and
+# that split runs into two real constraints, recorded in `docs/调试与测试.md` §3.3.
 #
 # No `# syntax=` directive on purpose: the built-in frontend that ships with
 # Docker Desktop supports everything used here, and pinning a frontend version

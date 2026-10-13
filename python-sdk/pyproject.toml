@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dogwood-sdk"
+version = "0.1.0"
+description = "A dependency-free Python client for the Dogwood policy engine's Unix-socket protocol."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+# No runtime dependencies, and that is a design property rather than an accident:
+# the protocol is a 4-byte length prefix plus JSON, so a client that needs a
+# dependency to speak it has been over-built. `pip install .` pulls nothing.
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/dogwood-policy/dogwood-local-engine"
+
+[tool.setuptools]
+packages = ["dogwood_sdk"]
