@@ -1,0 +1,23 @@
+// 与 python-demo/hsbc/schema.cedarschema 同一份（这里只保留对比用到的两个动作）。
+
+namespace HSBC {
+  type TransferInput         = { amount: Long, payee: String, payee_type: String };
+  type TransferOutput        = { reference: String };
+  type ApproveTransferInput  = { amount: Long, approver: String };
+  type ApproveTransferOutput = { approved: Bool };
+
+  entity User;
+  entity Account;
+
+  action "approve_transfer" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: ApproveTransferInput, output: ApproveTransferOutput }
+  };
+
+  action "transfer" appliesTo {
+    principal: [User],
+    resource: [Account],
+    context: { input: TransferInput, output: TransferOutput }
+  };
+}

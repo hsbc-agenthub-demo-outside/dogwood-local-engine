@@ -1,8 +1,17 @@
 {
-  // 用 pyright / ruff 之类命令行工具时的等价配置：把 python-demo 自己加进搜索路径，
-  // 这样 dogwood_client / dogwood_middleware 这些同级模块能被解析到。
-  // （如果你在 VS Code 里以仓库根为工作区打开，Pylance 看的是 .vscode/settings.json。）
-  "extraPaths": ["."],
+  // 用 pyright / ruff / mypy 之类命令行工具时的等价配置。
+  //
+  // 为什么需要：这些脚本靠 `sys.path.insert` 导入兄弟目录里的模块
+  // （dogwood_client 在 python-demo/，scenario 在 opa-vs-dogwood/），
+  // 静态分析不会执行那行代码，于是报"找不到模块"。
+  // 路径是相对**本文件所在目录**（python-demo/）的。
+  "extraPaths": [
+    ".",
+    "hsbc",
+    "opa-vs-dogwood",
+    "opa-vs-dogwood/dogwood",
+    "opa-vs-dogwood/opa"
+  ],
   "include": ["."],
   "exclude": ["**/__pycache__"]
 }

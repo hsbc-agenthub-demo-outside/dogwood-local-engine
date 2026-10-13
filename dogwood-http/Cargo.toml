@@ -1,0 +1,59 @@
+[package]
+name = "dogwood-http"
+version = "0.1.0"
+edition = "2024"
+# A demo HTTP adapter, published nowhere: it is a deployment shim over
+# `dogwood-server`, not an artifact anyone depends on.
+publish = false
+description = "An HTTP + OpenAPI adapter in front of the dogwood-server Unix-socket API. A deployment shim, not an engine."
+license = "Apache-2.0"
+
+# Library + thin binary, mirroring `dogwood-server`: the library is what the
+# integration tests drive (an integration test cannot link a bin target), and it
+# is the right seam for a consumer that wants to mount the router in its own
+# service rather than run this command.
+[lib]
+name = "dogwood_http"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dogwood-http"
+path = "src/main.rs"
+
+[dependencies]
+# The adapter's ONLY engine dependency, and deliberately so: it speaks the
+# server's published wire types over the published client, and links no engine,
+# no store, and no policy code. Everything this crate can do to the engine, a
+# third-party client could do with a socket and 20 lines of JSON.
+dogwood-server = { path = "../dogwood-server" }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "time",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Schema generation + the Swagger UI, the two halves of "Swagger".
+utoipa = { version = "6", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "10", features = ["axum"] }
+clap = { version = "4", features = ["derive"] }
+# Constant-time comparison for the control-plane bearer token. Hand-rolling a
+# comparison is the classic way to reintroduce the timing oracle the token
+# exists to avoid, so the vetted primitive is a dependency rather than five
+# lines of arithmetic.
+subtle = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[test]]
+name = "http_e2e"
+path = "tests/http_e2e.rs"
+
+# The HTTP DTOs mirror `dogwood-server`'s wire types field for field. That is a
+# duplication, and this test is the thing that keeps it from drifting.
+[[test]]
+name = "dto_drift"
+path = "tests/dto_drift.rs"

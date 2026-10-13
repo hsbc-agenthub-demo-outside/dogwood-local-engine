@@ -141,6 +141,27 @@ python3 run_demo.py                        # 三幕剧情：先拒 → 记批准
 | 真引擎跑通全链路 | `cd python-demo && DW_HELPER_DIR=~/dw-install DW_STORE_DIR=~/dw-store ./test_with_real_engine.sh` |
 | 跑 9 个策略场景 | `cd python-demo && python3 -m hsbc.run_hsbc --all` |
 | 体检 / 排障 | `python3 doctor.py` · `DOGWOOD_TRACE=1 python3 test_middleware.py`（打出每一帧 JSON） |
+| 起 HTTP + Swagger（Docker） | `cp .env.example .env` → 填 `DOGWOOD_CONTROL_TOKEN` → `docker compose up --build -d` → <http://127.0.0.1:8080/docs> |
+| HTTP 全链路自检 | `./dogwood-http/examples/smoke.sh` |
+
+## HTTP 面（`dogwood-http/`，可选）
+
+引擎的接口是 Unix socket 上的长度前缀 JSON。如果部署环境拿不到 Unix socket
+（Docker Desktop、远程 harness、或者只想点点按钮看裁决），
+[`dogwood-http/`](dogwood-http) 把它翻成 HTTP，并给两个面各配一份 OpenAPI + Swagger UI：
+
+```bash
+cp .env.example .env
+echo "DOGWOOD_CONTROL_TOKEN=$(openssl rand -hex 32)" > .env
+docker compose up --build -d
+./dogwood-http/examples/smoke.sh     # 真引擎：403 → 记录批准 → 200；10 条断言
+```
+
+两条要记住的：**deny 是 HTTP 403，而不是 `200 + allowed:false`**（于是「看 2xx 就
+放行」的客户端天然 fail-closed）；**控制面必须和引擎同 uid、同 PID namespace**
+（control socket 是 `0700`，且 peer 认证依赖 Linux 的 `SO_PEERCRED`）。
+详见 [`dogwood-http/README.md`](dogwood-http/README.md)，里面也记了两个上游/环境层面的
+真实约束：数据 socket 被 `0700` 的 state 目录挡住，跨 PID namespace 的 peer 认证会失败。
 
 ## 已知限制
 

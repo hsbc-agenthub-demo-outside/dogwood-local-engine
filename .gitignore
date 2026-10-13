@@ -13,3 +13,8 @@ target/
 __pycache__/
 .DS_Store
 .exploration
+
+# `docker compose` reads the control-plane bearer token from here. Committing it
+# would publish the secret that authorizes policy authoring, so it is ignored on
+# purpose — see the header of docker-compose.yml for how to generate one.
+.env

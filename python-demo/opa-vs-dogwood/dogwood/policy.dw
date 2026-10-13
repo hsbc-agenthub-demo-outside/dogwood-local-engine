@@ -1,0 +1,22 @@
+// 对比用策略（Dogwood 版）：**时序信息在语言里**。
+//
+// 规则：转账金额 <= 10000 直接放行；超过 10000 必须有"同一金额、5 秒内、已批准"的历史。
+//
+// 窗口用 5s（而不是 1h）是为了让"事件滑出窗口"这件事能在几秒内演示出来 ——
+// Dogwood 的时间由 store 赋值，我们没法伪造。
+
+@id("cmp_small_transfer")
+permit (principal, action == HSBC::Action::"transfer", resource)
+when { context.input.amount <= 10000 };
+
+@id("cmp_large_transfer_needs_approval")
+permit (principal, action == HSBC::Action::"transfer", resource)
+when {
+    context.input.amount > 10000
+    && temporal {
+        formerly within 5s HSBC::Action::"approve_transfer"::response{
+            input.amount: context.input.amount,
+            output.approved: true
+        }
+    }
+};

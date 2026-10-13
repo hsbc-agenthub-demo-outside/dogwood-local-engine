@@ -1,0 +1,23 @@
+# The image builds from source; a host `target/` would be both huge and useless
+# (wrong platform, wrong toolchain) and would defeat the build cache mount.
+target/
+
+# Nothing in the image needs version control or editor state.
+.git/
+.gitignore
+.idea/
+.vscode/
+.github/
+
+# Not a workspace member: the Python demos talk to the engine over its socket and
+# have no part in the Rust build.
+python-demo/
+
+# Local noise.
+*.log
+**/*.rs.bk
+.DS_Store
+
+# Note the deliberate omission: `Cargo.lock` is gitignored in this repository, so
+# it is *not* excluded here. Copying the host's lock file is what lets the image
+# build with `--locked` and get the same dependency graph the tests ran against.

@@ -6,6 +6,11 @@ members = [
     # A demo service that puts the engine behind Unix sockets with a separate
     # control plane. Not for production use.
     "dogwood-server",
+    # A demo HTTP + OpenAPI adapter in front of `dogwood-server`'s sockets: the
+    # two planes re-spelled as two listeners, for deployment environments where a
+    # Unix socket is not the reachable transport (Docker Desktop, a remote
+    # harness). Also not for production use.
+    "dogwood-http",
     # The benchmark harness: deterministic workloads plus a uniform driver for
     # each implementation, comparing the frontend's in-memory reference engine
     # against the durable server across policy count, pinning, and concurrent

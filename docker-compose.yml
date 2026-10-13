@@ -1,0 +1,174 @@
+# A three-container Dogwood deployment for local Docker Desktop.
+#
+#   engine   the policy engine. Owns the store, the control socket, and the log.
+#            Publishes nothing.
+#   control  the HTTP control plane. Runs as the *engine's* uid and in the engine's
+#            PID namespace, because that is what its control socket requires.
+#   data     the HTTP data plane. Runs as a different, lower-privileged uid that
+#            cannot reach the control socket at all.
+#
+# Why the split into two adapters rather than one `--plane both` process: a single
+# adapter would be the process that takes the agent's events *and* rewrites the
+# rules, which is exactly what the engine's two sockets exist to prevent. The split
+# restores that boundary, and the OS enforces it rather than the configuration.
+#
+# Usage:
+#   echo "DOGWOOD_CONTROL_TOKEN=$(openssl rand -hex 32)" > .env
+#   docker compose up --build -d
+#   ./dogwood-http/examples/smoke.sh          # denials, an approval, then an allow
+#   open http://127.0.0.1:8080/docs           # data plane
+#   open http://127.0.0.1:8081/docs           # control plane: Authorize, paste the token
+#
+# Both ports are published to 127.0.0.1 only. Dropping the `127.0.0.1:` prefix
+# publishes them to your network, and the control plane then authorizes policy
+# changes with nothing but a bearer token.
+
+name: dogwood
+
+services:
+  engine:
+    build: .
+    image: dogwood-local:dev
+    # The engine's uid. Everything that owns or reaches the control socket runs as
+    # this uid, and nothing else does.
+    user: "10001:10001"
+    command:
+      - dogwood-server
+      - --dir
+      - /var/lib/dogwood
+      - run
+      - --snapshot-interval
+      - "10000"
+    volumes:
+      # TWO volumes, and the reason is a real constraint rather than tidiness.
+      #
+      # The engine sets its state directory (the first volume's root) to mode 0700,
+      # and correctly so: it holds the policy set and the log. But a Unix socket
+      # below a 0700 directory is unreachable by *any* other principal, no matter
+      # how the socket itself is chmodded, because path resolution needs search
+      # permission on every directory above the socket. So the layout that intends
+      # "a lower-privileged agent may connect to the data socket" cannot deliver it
+      # while the socket lives under the state directory.
+      #
+      # Mounting the socket directory as its own volume fixes that without weakening
+      # the state directory: the data container mounts only the second volume, at a
+      # path whose parents are traversable, and never sees the store or the control
+      # socket at all.
+      #
+      # Named volumes rather than bind mounts: the store and the sockets must not
+      # cross macOS's file-sharing layer, which is where socket files behave worst.
+      - dogwood-state:/var/lib/dogwood
+      - dogwood-run:/var/lib/dogwood/run
+    restart: unless-stopped
+    healthcheck:
+      # `ping` is the data socket's liveness verb, so this reports that the engine is
+      # *serving*, not merely that the process exists.
+      test: ["CMD", "dogwood-server", "--dir", "/var/lib/dogwood", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  control:
+    image: dogwood-local:dev
+    # Same uid as the engine: the control socket is mode 0700, so any other uid is
+    # refused at connect() before the uid allowlist is even consulted. (The engine's
+    # `--control-uid` flag suggests otherwise, but a mode-0700 socket cannot be
+    # reached by another uid whatever the allowlist says.)
+    user: "10001:10001"
+    # ...and the same PID namespace, which is a second, subtler requirement. The
+    # engine attests its control callers through SO_PEERCRED, which reports the peer's
+    # pid; across PID namespaces that pid does not map, and dogwood-server's
+    # peer-credential path fails outright rather than falling back to the uid. Sharing
+    # the namespace is what makes the control plane work across containers here.
+    pid: "service:engine"
+    command:
+      - dogwood-http
+      - serve
+      - --plane
+      - control
+      - --control-socket
+      - /var/lib/dogwood/control.sock
+      # The readiness probe pings the *data* socket, which is deliberatively
+      # unprivileged, so the control adapter needs it too.
+      - --data-socket
+      - /var/lib/dogwood/run/dogwood.sock
+      # 0.0.0.0 *inside* the container is required: a Docker published port is
+      # delivered to the container's address, never to its loopback. The narrowing
+      # happens at the `ports:` line below. This flag records that the decision is
+      # deliberate, so startup prints a notice instead of warning on every boot.
+      - --control-bind
+      - 0.0.0.0:8081
+      - --allow-non-loopback-control
+    environment:
+      # Required, with no default: compose refuses to start rather than bringing up an
+      # unauthenticated policy-authoring endpoint.
+      #   echo "DOGWOOD_CONTROL_TOKEN=$(openssl rand -hex 32)" > .env
+      DOGWOOD_CONTROL_TOKEN: ${DOGWOOD_CONTROL_TOKEN:?set DOGWOOD_CONTROL_TOKEN in .env}
+    volumes:
+      - dogwood-state:/var/lib/dogwood
+      - dogwood-run:/var/lib/dogwood/run
+    ports:
+      # 127.0.0.1 on the host only. This is the line that keeps a bearer token a
+      # sufficient secret for a single-machine deployment.
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      engine:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # No curl in the image: the binary probes itself.
+      test:
+        - CMD
+        - dogwood-http
+        - healthcheck
+        - http://127.0.0.1:8081/healthz
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  data:
+    image: dogwood-local:dev
+    # The uid the agent's side runs as: not the engine's, not in the control
+    # allowlist, and not the owner of anything.
+    user: "10002:10002"
+    command:
+      - dogwood-http
+      - serve
+      - --plane
+      - data
+      # Taken explicitly rather than as `<store-dir>/run/dogwood.sock`, because this
+      # container has no store directory: see the volume comment on `engine`.
+      - --data-socket
+      - /run/dogwood/dogwood.sock
+      - --data-bind
+      - 0.0.0.0:8080
+    volumes:
+      # Only the socket directory. The store, the policy set, and the control socket
+      # are not merely unreadable here — they are not present in this container's
+      # filesystem at all.
+      - dogwood-run:/run/dogwood
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      engine:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - dogwood-http
+        - healthcheck
+        - http://127.0.0.1:8080/healthz
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  # The engine's private directory: the store, the policy bundle, and control.sock.
+  dogwood-state:
+  # The socket directory, mounted where each side needs it — and the only thing the
+  # data plane's container can see.
+  dogwood-run:
