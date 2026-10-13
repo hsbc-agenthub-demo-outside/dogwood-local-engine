@@ -24,6 +24,7 @@
 | 谁更成熟？ | OPA 是 **CNCF 毕业项目**、有第三方安全审计、海量生产用户；Dogwood 是 **AWS 新开源**的项目，参考解释器明说"非生产用"，本地引擎是 1.0 但生态很薄。 |
 | 该不该都部署为服务？ | **OPA：应该，且默认做成"本地 sidecar/daemon 服务"**（Go 程序可退化为内嵌库，非 Go 可用 Wasm）。<br>**Dogwood：不应该做成网络服务**；优先"进程内嵌库"，仅当 agent 不可信、需要防篡改边界时，才用 `dogwood-server` 做**本机 Unix socket 独立进程**。`dogwood-http` 只是适配器，不是生产网关。 |
 | 能不能一起用？ | **能，而且是推荐姿势**：OPA 管"基础设施/API/集群"这类无状态通用策略，Dogwood 管"agent 工具调用的历史时序"这类有状态治理。二者**控制面必须保持隔离**，不要合进一个进程。 |
+| 能不能只保留一个（Dogwood 顶替 OPA）？ | **不能完全替代**。"HTTP 化"仓库已有（`dogwood-http`），但语言表达力、决策输出形态（只回布尔裁决）、管理面、横向扩展四类硬约束挡着。在"依赖历史的 agent 授权"这一子领域，Dogwood 可单独使用（见第 11 节）。 |
 
 ---
 
@@ -500,7 +501,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 - **决策审计用 Decision Logs** 上报到中心，别只看本地日志；
 - 如果确实要暴露 OPA 到网络：上 **TLS/mTLS + 鉴权**，并对管理类 API 做隔离——OPA 的 Policy/Data API 权限要靠你配置，它默认不替你认证。
 
-### 11.2 Dogwood 该怎么部署
+### 12.2 Dogwood 该怎么部署
 
 两种合法形态，按"agent 是否可信"选：
 
@@ -527,7 +528,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 - 控制面 bearer token **严格弱于**内核 uid 认证：会进日志/shell history、不过期、认证的是"部署"不是"人"；
   非 loopback 绑定必须显式承认（`--allow-non-loopback-control`）。
 
-### 11.3 "是否两个都应该直接部署为服务？"
+### 12.3 "是否两个都应该直接部署为服务？"
 
 **明确回答：不应该用同一套思路把两者都做成网络服务。**
 
@@ -542,7 +543,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 > 前者是**扩展性**诉求，后者是**安全边界**诉求——目标不同，别用同一套部署模板。
 > 尤其：**不要把 `dogwood-http` 的控制面当成对公网/对网络的常规 REST 网关**，它只是把 Unix socket 抬到 HTTP 的适配器。
 
-### 11.4 推荐蓝图 A：单机 agent 宿主（最贴合本仓库）
+### 12.4 推荐蓝图 A：单机 agent 宿主（最贴合本仓库）
 
 ```
 ┌─────────────────────────── host ───────────────────────────┐
@@ -561,7 +562,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 - 所有事件都要带 `principal`（历史按 principal 分键，漏了会落到别的键）；
 - 审计日志由 harness 自己落（Dogwood 不做），OPA 的 Decision Logs 作为环境策略侧审计。
 
-### 11.5 推荐蓝图 B：Kubernetes
+### 12.5 推荐蓝图 B：Kubernetes
 
 - **OPA**：以 **sidecar**（与业务容器同 Pod）或 **Gatekeeper**（集群准入）部署；策略走 bundle(OCI/HTTP)+Discovery；
   对 OPA 自身的管理 API 做鉴权与网络策略限制。
@@ -570,7 +571,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
   通过 Unix socket 通信），或直接把引擎库嵌进 harness 进程。
 - 需要多活/分片时，走 Dogwood 提供的 **pin 分片**（每个分片自己的日志与 append 点），由路由层决定 key → 实例。
 
-### 11.6 反面模式（不要这么做）
+### 12.6 反面模式（不要这么做）
 
 - ❌ 把 `dogwood-server` 当成一个集群共享的授权中心（破坏单写者/隔离语义）；
 - ❌ agent 与 dogwood 服务端**同 uid**（等于没有进程边界）；
@@ -582,7 +583,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 
 ---
 
-## 12. 如果两者一起用：分工原则
+## 13. 如果两者一起用：分工原则
 
 1. **按"决策是否依赖历史"切分**：
    只看当前请求 → OPA；依赖 agent 过去发生了什么 → Dogwood。
@@ -595,7 +596,7 @@ Dogwood：AWS 新开源，参考解释器与 `dogwood-server`/`dogwood-http` 都
 
 ---
 
-## 13. 对照速查表（一页版）
+## 14. 对照速查表（一页版）
 
 | | OPA | Dogwood |
 |---|---|---|
